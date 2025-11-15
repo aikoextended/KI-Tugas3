@@ -1,3 +1,5 @@
+# main_device2_keyo.py - DEVICE 2 (Keyo)
+
 import rsa
 import des
 from http_handler import HTTPCommunicator
@@ -6,300 +8,435 @@ import time
 class DeviceKeyo:
     def __init__(self):
         self.name = "Keyo"
+        self.private_key = None
+        self.public_key = None
         self.communicator = HTTPCommunicator(port=8080)
         self.other_device_ip = None
         self.session_data = {}
+        self.handshake_stage = 0
+        self.des_mode = False
+        self.is_initiator = False
         
-    def load_private_key(self):
-        """Load private key Keyo"""
-        # Private key Keyo (rahasia)
-        p, q = 53, 61
-        public_key, private_key = rsa.generate_keypair(p, q)
-        self.public_key = public_key
-        self.private_key = private_key
-        print(f"✓ Private key Keyo loaded")
-        print(f"✓ Public key Keyo: {rsa.format_public_key(public_key)}")
+    def load_keys(self):
+        """Load private dan public key"""
+        p, q = 107, 109  # n = 11663
+        self.public_key, self.private_key = rsa.generate_keypair(p, q)
+        print(f"✓ Key pair loaded - n: {self.public_key[1]}")
         
     def read_public_key_from_directory(self, username):
         """Membaca public key dari public directory"""
         try:
-            with open(f'public_directory/{username}.txt', 'r') as f:
+            with open(f'public_directory/{username.lower()}.txt', 'r') as f:
                 key_content = f.read().strip()
-                print(f"✓ Public key {username} dari direktori: {key_content}")
+                print(f"✓ Public key {username} ditemukan: {key_content}")
                 return rsa.parse_public_key(key_content)
-        except FileNotFoundError:
-            print(f"✗ File public key {username}.txt tidak ditemukan!")
-            return None
-        except Exception as e:
-            print(f"✗ Error membaca public key: {e}")
+        except:
+            print(f"✗ File public_directory/{username.lower()}.txt tidak ditemukan!")
             return None
     
-    def initiate_handshake(self):
-        """Keyo memulai handshake dengan mengirim N1 terenkripsi"""
-        print("\n" + "="*60)
-        print("🤝 KEYO MEMULAI HANDSHAKE")
-        print("="*60)
+    def handle_incoming_message(self, data):
+        """Callback untuk menangani pesan masuk"""
+        msg_type = data.get('type')
         
-        # Baca public key Putri dari direktori
-        putri_public_key = self.read_public_key_from_directory('putri')
+        if msg_type == 'N1_encrypted':
+            if self.is_initiator:
+                print("✗ Sudah menjadi initiator, tidak bisa menerima N1")
+                return {'status': 'error'}
+                
+            print("\n" + "="*50)
+            print("Pesan Dari " + data.get('sender', 'Unknown'))
+            print("="*50)
+            encrypted_n1 = data['ciphertext']
+            print(f"N1 Ciphertext: {encrypted_n1}")
+            
+            print("\nDeskripsi N1")
+            
+            try:
+                decrypted_n1 = rsa.decrypt(self.private_key, encrypted_n1)
+                print(f"N1 Plaintext: {decrypted_n1}")
+                self.session_data['N1_received'] = decrypted_n1
+                self.handshake_stage = 2
+                print("✓ N1 berhasil didekripsi. Silakan pilih menu [2] untuk melanjutkan.")
+                
+            except Exception as e:
+                print(f"✗ Error dekripsi N1: {e}")
+            
+            return {'status': 'received'}
         
-        if not putri_public_key:
-            print("✗ Gagal membaca public key Putri!")
+        elif msg_type == 'N1_N2_response':
+            if not self.is_initiator:
+                print("✗ Bukan initiator, tidak bisa menerima N1_N2 response")
+                return {'status': 'error'}
+                
+            print("\n" + "="*50)
+            print("Pesan Dari " + data.get('sender', 'Unknown'))
+            print("="*50)
+            received_n1 = data['N1_plaintext']
+            encrypted_n2 = data['N2_ciphertext']
+            
+            print(f"N1 Plaintext: {received_n1}")
+            print(f"N2 Ciphertext: {encrypted_n2}")
+            
+            stored_n1 = self.session_data.get('N1_sent', '')
+            print(f"Memverifikasi N1: '{received_n1}' == '{stored_n1}'")
+            
+            if received_n1 == stored_n1:
+                print(f"✓ VERIFIKASI N1 BERHASIL! {data.get('sender', '')} terautentikasi!")
+                
+                print("\nDeskripsi N2")
+                
+                try:
+                    decrypted_n2 = rsa.decrypt(self.private_key, encrypted_n2)
+                    print(f"N2 Plaintext: {decrypted_n2}")
+                    self.session_data['N2_received'] = decrypted_n2
+                    self.handshake_stage = 3
+                    print("✓ N2 berhasil didekripsi. Silakan pilih menu [3] untuk melanjutkan.")
+                    
+                except Exception as e:
+                    print(f"✗ Error dekripsi N2: {e}")
+            else:
+                print(f"✗ VERIFIKASI N1 GAGAL! Diterima: '{received_n1}', Diharapkan: '{stored_n1}'")
+            
+            return {'status': 'received'}
+        
+        elif msg_type == 'N2_plaintext':
+            if self.is_initiator:
+                print("✗ Initiator tidak bisa menerima N2 plaintext")
+                return {'status': 'error'}
+                
+            print("\n" + "="*50)
+            print("Pesan Dari " + data.get('sender', 'Unknown'))
+            print("="*50)
+            received_n2 = str(data['N2_plaintext'])
+            print(f"N2 Plaintext: {received_n2}")
+            
+            stored_n2 = str(self.session_data.get('N2_sent', ''))
+            print(f"Memverifikasi N2: '{received_n2}' == '{stored_n2}'")
+            
+            if received_n2 == stored_n2:
+                print(f"✓ VERIFIKASI N2 BERHASIL! {data.get('sender', '')} terautentikasi!")
+                self.handshake_stage = 4
+                print("✓ Verifikasi berhasil. Silakan pilih menu [4] untuk mengirim Secret Key.")
+            else:
+                print(f"✗ VERIFIKASI N2 GAGAL! Diterima: '{received_n2}', Diharapkan: '{stored_n2}'")
+            
+            return {'status': 'received'}
+        
+        elif msg_type == 'secret_key':
+            if not self.is_initiator:
+                print("✗ Bukan initiator, tidak bisa menerima secret key")
+                return {'status': 'error'}
+                
+            # Secret key sekarang dikirim sebagai plaintext
+            secret_key = data['secret_key']
+            self.session_data['secret_key'] = secret_key
+            print(f"\n✓ Secret Key: {secret_key}")
+            print("🔐 Saat ini komunikasi dilakukan menggunakan Algoritma DES")
+            self.des_mode = True
+            print("✓ Secret Key berhasil diterima. Silakan kirim pesan DES.")
+            
+            return {'status': 'received'}
+        
+        elif msg_type == 'des_message':
+            if not self.des_mode:
+                print("🔐 Saat ini komunikasi dilakukan menggunakan Algoritma DES")
+                self.des_mode = True
+            
+            print("\n" + "="*50)
+            print("Pesan dari " + data.get('sender', 'Unknown'))
+            print("="*50)
+            ciphertext = data['ciphertext']
+            print(f"Ciphertext: {ciphertext}")
+            
+            secret_key = self.session_data.get('secret_key')
+            if secret_key:
+                print(f"🔑 Secret Key: {secret_key}")
+                try:
+                    plaintext = des.des_decrypt(ciphertext, secret_key)
+                    print(f"📝 Plaintext: {plaintext}")
+                except Exception as e:
+                    print(f"✗ Error dekripsi: {e}")
+            else:
+                print("✗ Secret key belum tersedia!")
+            
+            return {'status': 'received'}
+        
+        return {'status': 'ok'}
+    
+    def send_n1_encrypted(self):
+        """Menu 1: Kirim N1 encrypted"""
+        if self.is_initiator:
+            print("✗ Sudah menjadi initiator, tidak bisa mengirim N1 lagi")
+            return
+            
+        print("\n--- Kirim N1 Encrypted ---")
+        other_name = input("Public key (nama device penerima): ")
+        other_public_key = self.read_public_key_from_directory(other_name)
+        
+        if not other_public_key:
             return
         
-        # Input N1
-        n1_message = input("\n🔐 Masukkan pesan N1 untuk Putri: ")
-        self.session_data['N1'] = n1_message
+        n1_plain = input("Kirim N1 Plaintext: ")
+        # VALIDASI KHUSUS: N1 harus 1 karakter
+        if len(n1_plain) != 1:
+            print("✗ N1 harus 1 karakter!")
+            return
+            
+        self.session_data['N1_sent'] = n1_plain
         
-        # Enkripsi N1 dengan public key Putri
-        print(f"\n🔒 Mengenkripsi N1 dengan public key Putri...")
-        encrypted_n1 = rsa.encrypt(putri_public_key, n1_message)
-        print(f"✓ N1 terenkripsi: {encrypted_n1}")
-        
-        # Kirim N1 terenkripsi ke Putri
-        print("\n📤 Mengirim N1 terenkripsi ke Putri...")
         try:
-            response = self.communicator.send_message(self.other_device_ip, {
+            encrypted_n1 = rsa.encrypt(other_public_key, n1_plain)
+            print(f"N1 Ciphertext: {encrypted_n1}")
+            
+            self.communicator.send_message(self.other_device_ip, {
                 'type': 'N1_encrypted',
                 'sender': self.name,
                 'ciphertext': encrypted_n1
             })
-            
-            if response.get('status') == 'ok':
-                print("✓ N1 berhasil dikirim!")
-                print("⏳ Menunggu respons dari Putri...")
-            
+            print("✓ N1 (Ciphertext) Berhasil dikirim")
+            self.handshake_stage = 1
+            self.is_initiator = True
         except Exception as e:
-            print(f"✗ Gagal mengirim N1: {e}")
+            print(f"✗ Gagal mengirim: {e}")
     
-    def handle_incoming_message(self, data):
-        """Callback untuk menangani pesan masuk"""
-        print("\n" + "="*60)
-        print(f"📨 PESAN MASUK dari {data.get('sender', 'Unknown')}")
-        print("="*60)
-        
-        msg_type = data.get('type')
-        
-        if msg_type == 'N1_encrypted':
-            # Terima N1 terenkripsi dari Putri
-            print("Tipe: N1 (Challenge dari Putri)")
-            encrypted_n1 = data['ciphertext']
-            print(f"Ciphertext N1: {encrypted_n1}")
+    def send_n1_n2_response(self):
+        """Menu 2: Kirim N1 plaintext + N2 encrypted"""
+        if self.is_initiator:
+            print("✗ Initiator tidak bisa mengirim N1_N2 response")
+            return
             
-            # Dekripsi dengan private key Keyo
-            try:
-                decrypted_n1 = rsa.decrypt(self.private_key, encrypted_n1)
-                print(f"✓ Dekripsi N1 berhasil: {decrypted_n1}")
-                
-                # Simpan N1
-                self.session_data['N1_received'] = decrypted_n1
-                
-                # Generate N2
-                n2_input = input("\n🔐 Masukkan pesan N2 untuk Putri: ")
-                self.session_data['N2'] = n2_input
-                
-                # Baca public key Putri dari direktori
-                putri_public_key = self.read_public_key_from_directory('putri')
-                
-                if putri_public_key:
-                    # Enkripsi N2 dengan public key Putri
-                    encrypted_n2 = rsa.encrypt(putri_public_key, n2_input)
-                    
-                    # Kirim balik N1 plaintext dan N2 encrypted
-                    print("\n📤 Mengirim N1 (plaintext) dan N2 (encrypted) ke Putri...")
-                    return {
-                        'status': 'ok',
-                        'type': 'N1_N2_response',
-                        'sender': self.name,
-                        'N1_plaintext': decrypted_n1,
-                        'N2_ciphertext': encrypted_n2
-                    }
-                    
-            except Exception as e:
-                print(f"✗ Error: {e}")
-                return {'status': 'error', 'message': str(e)}
-        
-        elif msg_type == 'N1_N2_response':
-            # Terima N1 plaintext dan N2 encrypted dari Putri
-            print("Tipe: N1 (plaintext) dan N2 (encrypted) dari Putri")
-            received_n1 = data['N1_plaintext']
-            encrypted_n2 = data['N2_ciphertext']
-            
-            print(f"N1 plaintext diterima: {received_n1}")
-            print(f"N1 asli              : {self.session_data.get('N1', '')}")
-            
-            # Verifikasi N1
-            if received_n1 == self.session_data.get('N1'):
-                print("✓ VERIFIKASI N1 BERHASIL! Putri terautentikasi!")
-                
-                # Dekripsi N2 dengan private key Keyo
-                try:
-                    decrypted_n2 = rsa.decrypt(self.private_key, encrypted_n2)
-                    print(f"✓ Dekripsi N2 berhasil: {decrypted_n2}")
-                    
-                    # Kirim balik N2 plaintext ke Putri untuk verifikasi
-                    print("\n📤 Mengirim N2 (plaintext) ke Putri untuk verifikasi...")
-                    time.sleep(1)
-                    
-                    response = self.communicator.send_message(self.other_device_ip, {
-                        'type': 'N2_plaintext',
-                        'sender': self.name,
-                        'N2_plaintext': decrypted_n2
-                    })
-                    
-                    if response.get('status') == 'authenticated':
-                        print("✓ Putri telah mengirim secret key!")
-                        
-                        # Dekripsi secret key
-                        encrypted_secret = response['secret_key_encrypted']
-                        secret_key = rsa.decrypt(self.private_key, encrypted_secret)
-                        self.session_data['secret_key'] = secret_key
-                        
-                        print(f"✓ Secret key diterima: {secret_key}")
-                        print("\n🎉 AUTENTIKASI SELESAI! Siap berkomunikasi dengan DES")
-                        
-                except Exception as e:
-                    print(f"✗ Error: {e}")
-            else:
-                print("✗ VERIFIKASI N1 GAGAL!")
-            
-            return {'status': 'ok'}
-        
-        elif msg_type == 'N2_plaintext':
-            # Terima N2 plaintext dari Putri untuk verifikasi
-            print("Tipe: N2 Plaintext (Verifikasi)")
-            received_n2 = data['N2_plaintext']
-            print(f"N2 diterima: {received_n2}")
-            print(f"N2 asli    : {self.session_data.get('N2', '')}")
-            
-            # Verifikasi N2
-            if received_n2 == self.session_data.get('N2'):
-                print("✓ VERIFIKASI BERHASIL! Putri terautentikasi!")
-                
-                # Generate secret key untuk DES
-                secret_key = input("\n🔑 Masukkan Secret Key (8 karakter) untuk komunikasi DES: ")
-                
-                # Baca public key Putri
-                putri_public_key = self.read_public_key_from_directory('putri')
-                
-                if putri_public_key:
-                    # Enkripsi secret key dengan public key Putri
-                    encrypted_secret = rsa.encrypt(putri_public_key, secret_key)
-                    
-                    # Simpan secret key
-                    self.session_data['secret_key'] = secret_key
-                    
-                    print(f"✓ Secret key dienkripsi dan siap dikirim")
-                    return {
-                        'status': 'authenticated',
-                        'type': 'secret_key',
-                        'sender': self.name,
-                        'secret_key_encrypted': encrypted_secret
-                    }
-            else:
-                print("✗ VERIFIKASI GAGAL! N2 tidak cocok!")
-                return {'status': 'verification_failed'}
-        
-        elif msg_type == 'secret_key':
-            # Terima secret key dari Putri
-            print("Tipe: Secret Key dari Putri")
-            encrypted_secret = data['secret_key_encrypted']
-            
-            # Dekripsi dengan private key Keyo
-            try:
-                secret_key = rsa.decrypt(self.private_key, encrypted_secret)
-                self.session_data['secret_key'] = secret_key
-                print(f"✓ Secret key diterima: {secret_key}")
-                print("\n🎉 AUTENTIKASI SELESAI! Siap berkomunikasi dengan DES")
-                return {'status': 'ok'}
-            except Exception as e:
-                print(f"✗ Error dekripsi secret key: {e}")
-                return {'status': 'error'}
-        
-        elif msg_type == 'des_message':
-            # Terima pesan DES
-            print("Tipe: Pesan DES")
-            ciphertext = data['ciphertext']
-            print(f"Ciphertext: {ciphertext}")
-            
-            # Dekripsi dengan secret key
-            secret_key = self.session_data.get('secret_key')
-            if secret_key:
-                try:
-                    plaintext = des.des_decrypt(ciphertext, secret_key)
-                    print(f"✓ Plaintext: {plaintext}")
-                    return {'status': 'received'}
-                except Exception as e:
-                    print(f"✗ Error dekripsi DES: {e}")
-                    return {'status': 'error'}
-            else:
-                print("✗ Secret key belum tersedia!")
-        
-        return {'status': 'ok'}
-    
-    def send_des_message(self):
-        """Mengirim pesan menggunakan DES"""
-        secret_key = self.session_data.get('secret_key')
-        if not secret_key:
-            print("✗ Secret key belum tersedia! Lakukan handshake terlebih dahulu.")
+        if self.handshake_stage < 2:
+            print("✗ Belum menerima N1. Tunggu pesan N1 terlebih dahulu.")
             return
         
-        plaintext = input("\n📝 Masukkan pesan (DES): ")
+        print("\n--- Kirim Respons N1 + N2 ---")
+        other_name = input("Public key (nama device pengirim): ")
+        other_public_key = self.read_public_key_from_directory(other_name)
         
-        # Enkripsi dengan DES
-        ciphertext = des.des_encrypt(plaintext, secret_key)
+        if not other_public_key:
+            return
         
-        print(f"\n🔒 Plaintext : {plaintext}")
-        print(f"🔒 Key      : {secret_key}")
-        print(f"🔒 Ciphertext: {ciphertext}")
+        n2_plain = input("Kirim N2 Plaintext: ")
+        # VALIDASI KHUSUS: N2 harus 1 karakter
+        if len(n2_plain) != 1:
+            print("✗ N2 harus 1 karakter!")
+            return
+            
+        self.session_data['N2_sent'] = n2_plain
         
-        # Kirim ke Putri
         try:
-            response = self.communicator.send_message(self.other_device_ip, {
+            encrypted_n2 = rsa.encrypt(other_public_key, n2_plain)
+            print(f"N2 Ciphertext: {encrypted_n2}")
+            
+            self.communicator.send_message(self.other_device_ip, {
+                'type': 'N1_N2_response',
+                'sender': self.name,
+                'N1_plaintext': str(self.session_data['N1_received']),
+                'N2_ciphertext': encrypted_n2
+            })
+            print("✓ N1 (Plaintext) dan N2 (Ciphertext) Berhasil dikirim")
+            self.handshake_stage = 3
+        except Exception as e:
+            print(f"✗ Gagal mengirim: {e}")
+    
+    def send_n2_plaintext(self):
+        """Menu 3: Kirim N2 plaintext"""
+        if not self.is_initiator:
+            print("✗ Responder tidak bisa mengirim N2 plaintext")
+            return
+            
+        if self.handshake_stage < 3:
+            print("✗ Belum memverifikasi N1 dan mendapatkan N2. Tunggu tahap sebelumnya selesai.")
+            return
+        
+        print("\n--- Kirim N2 Plaintext ---")
+        try:
+            self.communicator.send_message(self.other_device_ip, {
+                'type': 'N2_plaintext',
+                'sender': self.name,
+                'N2_plaintext': str(self.session_data['N2_received'])
+            })
+            print("✓ N2 (Plaintext) Berhasil dikirim")
+            self.handshake_stage = 4
+            print("⏳ Menunggu secret key dari responder...")
+        except Exception as e:
+            print(f"✗ Gagal mengirim: {e}")
+    
+    def send_secret_key(self):
+        """Menu 4: Kirim Secret Key"""
+        if self.is_initiator:
+            print("✗ Initiator tidak bisa mengirim secret key")
+            return
+            
+        if self.handshake_stage < 4:
+            print("✗ Belum verifikasi lengkap. Tunggu verifikasi N2 terlebih dahulu.")
+            return
+        
+        print("\n--- Kirim Secret Key ---")
+        secret_key = input("Kirim Secret Key (bisa 1-8 karakter): ").strip()
+        
+        # Validasi: secret key maksimal 8 karakter
+        if len(secret_key) > 8:
+            print("✗ Secret key maksimal 8 karakter! Menggunakan 8 karakter pertama.")
+            secret_key = secret_key[:8]
+        
+        if not secret_key:
+            print("✗ Secret key tidak boleh kosong!")
+            return
+            
+        print(f"Secret Key: '{secret_key}' (panjang: {len(secret_key)} karakter)")
+        
+        try:
+            self.session_data['secret_key'] = secret_key
+            
+            # Kirim secret key sebagai plaintext (tidak dienkripsi)
+            self.communicator.send_message(self.other_device_ip, {
+                'type': 'secret_key',
+                'sender': self.name,
+                'secret_key': secret_key  # Kirim sebagai plaintext
+            })
+            print("✓ Secret Key Berhasil dikirim")
+            print("🔐 Saat ini komunikasi dilakukan menggunakan Algoritma DES")
+            self.des_mode = True
+        except Exception as e:
+            print(f"✗ Gagal mengirim secret key: {e}")
+    
+    def send_des_message(self):
+        """Kirim pesan DES"""
+        if not self.des_mode:
+            print("✗ Belum masuk mode DES. Selesaikan handshake terlebih dahulu.")
+            return
+            
+        print("\n--- Kirim Pesan DES ---")
+        
+        # Minta input secret key setiap kali kirim pesan
+        secret_key = input("Masukkan Secret Key: ").strip()
+        if not secret_key:
+            print("✗ Secret key tidak boleh kosong!")
+            return
+            
+        # Validasi: secret key maksimal 8 karakter
+        if len(secret_key) > 8:
+            print("✗ Secret key maksimal 8 karakter! Menggunakan 8 karakter pertama.")
+            secret_key = secret_key[:8]
+        
+        plaintext = input("Masukkan plaintext: ")
+        if not plaintext:
+            print("✗ Plaintext tidak boleh kosong!")
+            return
+            
+        try:
+            print(f"🔑 Secret Key: {secret_key}")
+            
+            ciphertext = des.des_encrypt(plaintext, secret_key)
+            print(f"🔒 Ciphertext: {ciphertext}")
+            
+            self.communicator.send_message(self.other_device_ip, {
                 'type': 'des_message',
                 'sender': self.name,
                 'ciphertext': ciphertext
             })
-            print("✓ Pesan DES terkirim!")
+            print("✓ Ciphertext berhasil dikirim")
+            
         except Exception as e:
-            print(f"✗ Gagal mengirim: {e}")
+            print(f"✗ Error: {e}")
     
-    def run(self):
-        """Menjalankan device"""
-        print("="*60)
-        print("DEVICE 2 - KEYO")
-        print("="*60)
+    def start_des_communication(self):
+        """Mulai komunikasi DES"""
+        print("\n" + "="*50)
+        print("MODE KOMUNIKASI DES")
+        print("="*50)
+        print("Kedua device sekarang bisa saling mengirim pesan DES")
+        print("Gunakan menu [5] untuk kirim pesan, [9] untuk keluar")
         
-        # Load private key
-        self.load_private_key()
-        
-        # Input IP device lain
-        print(f"\nIP Address Keyo: {self.communicator.local_ip}")
-        self.other_device_ip = input("Masukkan IP Address Putri (Device 1): ").strip()
-        
-        # Start server
-        self.communicator.start_server(self.handle_incoming_message)
-        
-        print("\n✓ Keyo siap berkomunikasi")
-        print("="*60)
-        
-        # Menu
-        while True:
-            print("\n[1] Mulai Handshake (kirim N1)")
-            print("[2] Kirim pesan DES")
-            print("[3] Keluar")
+        while self.des_mode:
+            self.show_des_menu()
             choice = input("Pilih: ").strip()
             
-            if choice == '1':
-                self.initiate_handshake()
-            elif choice == '2':
+            if choice == '5':
                 self.send_des_message()
-            elif choice == '3':
+            elif choice == '9':
                 break
             else:
                 print("Pilihan tidak valid")
+    
+    def show_des_menu(self):
+        """Tampilkan menu DES"""
+        print("\n" + "="*30)
+        print("MENU DES - KEYO")
+        print("="*30)
+        print("[5] Kirim Pesan DES")
+        print("[9] Keluar")
+        print("="*30)
+    
+    def show_menu(self):
+        """Tampilkan menu berdasarkan role dan stage handshake"""
+        print("\n" + "="*50)
+        print("Menu Keyo")
+        print("="*50)
+        
+        if self.des_mode:
+            self.start_des_communication()
+            return
+            
+        if self.handshake_stage == 0 and not self.is_initiator:
+            print("[1] Kirim N1 encrypted (jadikan initiator)")
+            print("[9] Keluar")
+            
+        elif self.is_initiator:
+            if self.handshake_stage == 1:
+                print("⏳ Menunggu respons N1_N2...")
+            elif self.handshake_stage == 3:
+                print("[3] Kirim N2 plaintext (verifikasi)")
+            elif self.handshake_stage == 4:
+                print("⏳ Menunggu secret key dari responder...")
+            print("[9] Keluar")
+            
+        else:
+            if self.handshake_stage == 2:
+                print("[2] Kirim N1 plaintext + N2 encrypted (respons)")
+            elif self.handshake_stage == 4:
+                print("[4] Kirim Secret Key")
+            print("[9] Keluar")
+        
+        print("="*50)
+    
+    def run(self):
+        """Menjalankan device"""
+        print("="*50)
+        print("DEVICE 2 - KEYO")
+        print("="*50)
+        
+        self.load_keys()
+        
+        print(f"📍 IP Address Keyo: {self.communicator.local_ip}")
+        self.other_device_ip = input("Masukkan IP Address device lain: ").strip()
+        
+        self.communicator.start_server(self.handle_incoming_message)
+        print(f"✓ Terhubung dengan {self.other_device_ip}")
+        
+        while True:
+            self.show_menu()
+            if self.des_mode:
+                continue
+                
+            choice = input("Pilih: ").strip()
+            
+            if choice == '1' and self.handshake_stage == 0 and not self.is_initiator:
+                self.send_n1_encrypted()
+            elif choice == '2' and not self.is_initiator and self.handshake_stage == 2:
+                self.send_n1_n2_response()
+            elif choice == '3' and self.is_initiator and self.handshake_stage == 3:
+                self.send_n2_plaintext()
+            elif choice == '4' and not self.is_initiator and self.handshake_stage == 4:
+                self.send_secret_key()
+            elif choice == '9':
+                break
+            else:
+                print("Pilihan tidak valid atau tidak tersedia di stage ini")
         
         self.communicator.stop_server()
+        print("\n👋 Program dihentikan")
 
 if __name__ == "__main__":
     device = DeviceKeyo()

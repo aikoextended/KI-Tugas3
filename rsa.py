@@ -43,12 +43,13 @@ def generate_keypair(p, q):
     n = p * q
     phi = (p - 1) * (q - 1)
     
-    # Pilih e (biasanya 65537, tapi kita cari yang cocok)
+    # Pilih e (gunakan 65537 yang umum digunakan)
     e = 65537
-    while gcd(e, phi) != 1:
-        e -= 2
-        if e < 3:
-            e = 3
+    if gcd(e, phi) != 1:
+        # Jika tidak cocok, cari e yang cocok
+        e = 3
+        while gcd(e, phi) != 1:
+            e += 2
     
     d = mod_inverse(e, phi)
     
@@ -56,29 +57,46 @@ def generate_keypair(p, q):
     return ((e, n), (d, n))
 
 def string_to_int(text):
-    """Convert string ke integer"""
-    return int.from_bytes(text.encode('utf-8'), byteorder='big')
+    """Convert string ke integer - MENDUKUNG STRING PANJANG"""
+    # Convert setiap karakter ke ASCII dan gabungkan
+    result = 0
+    for char in text:
+        result = (result << 8) + ord(char)
+    return result
 
 def int_to_string(num):
-    """Convert integer ke string"""
-    byte_length = (num.bit_length() + 7) // 8
-    return num.to_bytes(byte_length, byteorder='big').decode('utf-8', errors='ignore')
+    """Convert integer ke string - MENDUKUNG STRING PANJANG"""
+    if num == 0:
+        return ""
+    
+    result = ""
+    while num > 0:
+        result = chr(num & 0xFF) + result
+        num = num >> 8
+    return result
 
 def encrypt(public_key, plaintext):
-    """Enkripsi menggunakan public key"""
+    """Enkripsi menggunakan public key - MENDUKUNG STRING PANJANG"""
     e, n = public_key
+    
+    # Convert plaintext to integer
     plaintext_int = string_to_int(plaintext)
     
     if plaintext_int >= n:
-        raise ValueError("Plaintext terlalu panjang untuk key ini")
+        raise ValueError(f"Plaintext terlalu panjang untuk key ini. Plaintext: {plaintext_int}, n: {n}")
     
+    # Encrypt
     ciphertext_int = pow(plaintext_int, e, n)
     return ciphertext_int
 
 def decrypt(private_key, ciphertext_int):
-    """Dekripsi menggunakan private key"""
+    """Dekripsi menggunakan private key - MENDUKUNG STRING PANJANG"""
     d, n = private_key
+    
+    # Decrypt
     plaintext_int = pow(ciphertext_int, d, n)
+    
+    # Convert back to string
     plaintext = int_to_string(plaintext_int)
     return plaintext
 
